@@ -43,10 +43,7 @@ from netket.stats import (
 
 from functools import singledispatch
 
-_NaN = float("NaN")
 
-
-# VMC
 @singledispatch
 def _time_evo(self):
     raise ErrorException("unknown type?")
@@ -126,6 +123,16 @@ def create_timevo(op, sampler, *args, julia=False, **kwargs):
     return driver, fun
 
 
+METHODS = METHODS = {
+    "RK23": scipy.integrate.RK23,
+    "RK45": scipy.integrate.RK45,
+    "DOP853": scipy.integrate.DOP853,
+    "RADAU": scipy.integrate.Radau,
+    "BDF": scipy.integrate.BDF,
+    "LSODA": scipy.integrate.LSODA,
+}
+
+
 class TimeEvolution(AbstractVariationalDriver):
     """
     Energy minimization using Variational Monte Carlo (VMC).
@@ -134,19 +141,18 @@ class TimeEvolution(AbstractVariationalDriver):
     def __init__(
         self, operator, sampler, sr, *args, **kwargs,
     ):
+        driver, fun = create_timevo(operator, sampler, *args, sr=sr, **kwargs)
 
         super(TimeEvolution, self).__init__(
-            sampler.machine, None,
+            sampler.machine, None, minimized_quantity_name=driver._loss_name
         )
-        driver, fun = create_timevo(operator, sampler, *args, sr=sr, **kwargs)
         self._driver = driver
         self._fun = fun
 
-        self._t = None
         self._solver = None
         self._state = None
 
-    def setup(self, solver, tspan, dt=None, adaptive=False, **kwargs):
+    def solver(self, METHOD, tspan, dt=None, adaptive=False, **kwargs):
         if isinstance(tspan, tuple):
             t0 = tspan[0]
             tend = tspan[-1]
@@ -155,22 +161,25 @@ class TimeEvolution(AbstractVariationalDriver):
 
         y0 = self._machine.numpy_flatten(self._machine.parameters)
 
-        if solver == "ode45" or solver == "dopri5" or solver == "rk45":
-            if adaptive is False:
-                self._integrator = _scint.RK45(
-                    self._fun,
-                    t0=t0,
-                    y0=y0,
-                    t_bound=tend,
-                    max_step=dt,
-                    first_step=dt,
-                    rtol=_np.inf,
-                    atol=_np.inf,
-                )
-            else:
-                self._integrator = _scint.RK45(
-                    self._fun, t0=t0, y0=y0, t_bound=tend, **kwargs
-                )
+        METHOD = METHOD.upper()
+        if METHOD not in METHODS:
+            raise ValueError("Unknown method")
+        else:
+            solver = METHODS[METHOD]
+
+        if adaptive is False:
+            self._integrator = solver(
+                self._fun,
+                t0=t0,
+                y0=y0,
+                t_bound=tend,
+                max_step=dt,
+                first_step=dt,
+                rtol=_np.inf,
+                atol=_np.inf,
+            )
+        else:
+            self._integrator = solver(self._fun, t0=t0, y0=y0, t_bound=tend, **kwargs)
 
     def advance(self, t_end=None, n_steps=None):
         """
@@ -195,7 +204,7 @@ class TimeEvolution(AbstractVariationalDriver):
         if self._integrator.status == "failed":
             raise ...
 
-    def iter(self, t_end, t_interval=1e-10):
+    def iter(self, delta_t, t_interval=1e-10):
         """
         Returns a generator which advances the time evolution in
         steps of `step` for a total of `n_iter` times.
@@ -207,6 +216,7 @@ class TimeEvolution(AbstractVariationalDriver):
         Yields:
             :(int): The current step.
         """
+        t_end = self.t + delta_t
         while self.t < t_end:
             _step_end = self.t + t_interval
             t0 = self.t
@@ -214,70 +224,12 @@ class TimeEvolution(AbstractVariationalDriver):
                 if self.t == t0:
                     yield self.t
 
+                self._step_count += 1
+                self._loss_stats = self._driver._loss_stats
                 self._integrator.step()
 
-    def run(
-        self,
-        t_end=None,
-        out=None,
-        obs=None,
-        show_progress=True,
-        save_params_every=50,  # for default logger
-        write_every=50,  # for default logger
-        step_size=1e-10,  # for default logger
-    ):
-        if obs is None:
-            obs = {}
-
-        if out is None:
-            print(
-                "No output specified (out=[apath|nk.logging.JsonLogger(...)])."
-                "Running the optimization but not saving the output."
-            )
-
-        t_b = self._integrator.t_bound
-        if t_b is None or t_b is _np.inf:
-            if t_end is None:
-                raise ValueError("must specify t_end")
-
-        if t_end is not None:
-            self._integrator.t_bound = t_end
-
-        # Log only non-root nodes
-        if self._mynode == 0:
-            # if out is a path, create an overwriting Json Log for output
-            if isinstance(out, str):
-                logger = _JsonLog(out, "w", save_params_every, write_every)
-            else:
-                logger = out
-        else:
-            logger = None
-            show_progress = False
-
-        with tqdm(total=self.t_end, initial=self.t, disable=not show_progress) as pbar:
-            told = self.t
-            for step, t in enumerate(self.iter(self.t_end, step_size)):
-                # if the cost-function is defined then report it in the progress bar
-                if self._loss_stats is not None:
-                    itr.set_postfix_str(self._loss_name + "=" + str(self._loss_stats))
-
-                obs_data = self.estimate(obs)
-
-                if self._loss_stats is not None:
-                    obs_data[self._loss_name] = self._loss_stats
-
-                obs_data["t"] = t
-
-                if logger is not None:
-                    logger(step, obs_data, self.machine)
-
-                pbar.update(t - told)
-                told = t
-
-        # flush at the end of the evolution so that final values are saved to
-        # file
-        if logger is not None:
-            logger.flush(self.machine)
+    def _log_additional_data(self, obs, step):
+        obs["t"] = self.t
 
     def _forward_and_backward(self):
         integrator = self._integrator
@@ -285,8 +237,16 @@ class TimeEvolution(AbstractVariationalDriver):
         return integrator.f
 
     @property
+    def step_value(self):
+        return self.t
+
+    @property
     def dt(self):
         return self._integrator.step_size
+
+    @dt.setter
+    def dt(self, _dt):
+        self._integrator.step_size = _dt
 
     @property
     def t(self):
@@ -316,13 +276,15 @@ class TimeEvolution(AbstractVariationalDriver):
 
     def reset(self):
         self._driver.reset()
+        self._step_count = 0
 
     def update_parameters(self, dp):
-        print("using this")
         self._machine.numpy_unflatten(dp, self._machine.parameters)
 
     def __repr__(self):
-        return "TimeEvo"
+        return "TimeEvolution(step_count={}, t={}, n_samples={}, n_discard={})".format(
+            self.step_count, self.t, self._driver.n_samples, self._driver.n_discard
+        )
 
     def info(self, depth=0):
         return "stuff"
