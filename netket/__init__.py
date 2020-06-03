@@ -46,6 +46,7 @@ from . import (
     _exact_dynamics,
     _vmc,
     _steadystate,
+    _dynamics,
 )
 
 # Main applications
