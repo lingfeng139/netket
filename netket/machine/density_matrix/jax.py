@@ -198,12 +198,25 @@ def DenseMixingReal(
     """Layer constructor function for a complex purification layer."""
 
     def init_fun(rng, input_shape):
-        assert input_shape[-1] % 2 == 0
-        output_shape = input_shape[:-1] + (out_mix,)
+        # Check if we are applying it to a vectorized row/col, or if they
+        # are already split
+        vectorised_input = True
+        if len(input_shape) == 2:
+            if isinstance(input_shape[0], tuple) and isinstance(input_shape[1], tuple):
+                vectorised_input = False
+
+        if vectorised_input:
+            assert input_shape[-1] % 2 == 0
+            output_shape = input_shape[:-1] + (out_mix,)
+            input_size = input_shape[-1] // 2
+        else:
+            input_shape_r = input_shape[0]
+            input_shape_c = input_shape[1]
+            assert input_shape_r == input_shape_c
+            output_shape = input_shape_r[:-1] + (out_mix,)
+            input_size = input_shape_r[-1]
 
         k = jax.random.split(rng, 3)
-
-        input_size = input_shape[-1] // 2
 
         # Weights for the mixing part
         Ur, Ui = (
@@ -225,20 +238,57 @@ def DenseMixingReal(
         else:
             Ur, Ui = params
 
+        # if they are already separed
+        if isinstance(inputs, tuple):
+            xr, xc = inputs
+        else:
+            xr, xc = jax.numpy.split(inputs, 2, axis=-1)
+
+        theta = jax.numpy.dot(xr[:,], (0.5 * Ur + 0.5j * Ui))
+        theta += jax.numpy.dot(xc[:,], (0.5 * Ur + 0.5j * Ui)).conj()
+
+        if use_hidden_bias:
+            theta += dr
+
+        return theta
+
+    return init_fun, apply_fun
+
+
+def DenseMixingComplex(
+    out_mix, use_hidden_bias=True, W_init=glorot_normal(), b_init=normal()
+):
+    """Layer constructor function for a complex purification layer."""
+
+    def init_fun(rng, input_shape):
+        assert input_shape[-1] % 2 == 0
+        output_shape = input_shape[:-1] + (out_mix,)
+
+        k = jax.random.split(rng, 3)
+
+        input_size = input_shape[-1] // 2
+
+        # Weights for the mixing part
+        U = W_init(k[0], (input_size, out_mix))
+
+        if use_hidden_bias:
+            d = b_init(k[1], (out_mix,))
+
+            return output_shape, (U, d)
+        else:
+            return output_shape, (U,)
+
+    @jax.jit
+    def apply_fun(params, inputs, **kwargs):
+        if use_hidden_bias:
+            U, d = params
+        else:
+            (U,) = params
+
         xr, xc = jax.numpy.split(inputs, 2, axis=-1)
 
-        theta = jax.numpy.dot(
-            xr[
-                :,
-            ],
-            (0.5 * Ur + 0.5j * Ui),
-        )
-        theta += jax.numpy.dot(
-            xc[
-                :,
-            ],
-            (0.5 * Ur - 0.5j * Ui),
-        )
+        theta = jax.numpy.dot(xr[:,], U)
+        theta += jax.numpy.dot(xc[:,], U).conj()
 
         if use_hidden_bias:
             theta += dr
@@ -433,4 +483,91 @@ def JaxRbmSpin(hilbert, alpha, dtype=complex):
         stax.serial(stax.Dense(alpha * hilbert.size * 2), LogCoshLayer, SumLayer),
         dtype=dtype,
         outdtype=dtype,
+    )
+
+
+# Takes a vector input and splits in two half parts run in parallel
+def RowColFanOut():
+    """Layer construction function for a fan-out layer splitting
+    row and column indices into two parallel layers.
+    Should be followed by a parallel layer."""
+
+    def init_fun(rng, input_shape):
+        assert input_shape[-1] % 2 == 0
+        output_shape = input_shape[:-1] + (input_shape[-1] // 2,)
+
+        return (output_shape, output_shape), tuple()
+
+    def apply_fun(params, inputs, **kwargs):
+        xr, xc = jax.numpy.split(inputs, 2, axis=-1)
+        return xr, xc
+
+    return init_fun, apply_fun
+
+
+RowColFanOut = RowColFanOut()
+
+
+def RowColSerial(*layers):
+    """Combines a FanOut layer that separes row and columns into two
+  different arrays, and then applies the same serial sequence of layers
+  (with the exact same weights) to both, in parallel.
+
+  Output is the output of the serial layer, for rows and columns. 
+  """
+    nlayers = len(layers)
+    init_funs, apply_funs = zip(*layers)
+
+    def init_fun(rng, input_shape):
+        assert input_shape[-1] % 2 == 0
+        rc_input_shape = input_shape[:-1] + (input_shape[-1] // 2,)
+
+        params = []
+        for init_fun in init_funs:
+            rng, layer_rng = random.split(rng)
+            rc_input_shape, param = init_fun(layer_rng, rc_input_shape)
+            params.append(param)
+        return (rc_input_shape, rc_input_shape), params
+
+    def apply_fun(params, inputs, **kwargs):
+        rng = kwargs.pop("rng", None)
+        rng_row, rng_col = random.split(rng) if rng is not None else (None, None)
+        rngs_row = (
+            random.split(rng_row, nlayers) if rng_row is not None else (None,) * nlayers
+        )
+        rngs_col = (
+            random.split(rng_col, nlayers) if rng_col is not None else (None,) * nlayers
+        )
+
+        inputs_row, inputs_col = jax.numpy.split(inputs, 2, axis=-1)
+
+        for fun, param, rng in zip(apply_funs, params, rngs_row):
+            inputs_row = fun(param, inputs_row, rng=rng, **kwargs)
+
+        for fun, param, rng in zip(apply_funs, params, rngs_col):
+            inputs_col = fun(param, inputs_col, rng=rng, **kwargs)
+
+        return inputs_row, inputs_col
+
+    return init_fun, apply_fun
+
+
+def JaxDeepNetwork(
+    hilbert, beta, *deep_fun, use_mixing_bias=True, activation=logcosh, dtype=float
+):
+    if dtype == complex:
+        if use_mixing_bias:
+            error("Cannot use complex parameters and mixing bias, as it is real")
+        else:
+            mixing = DenseMixingComplex(hilbert.size * beta, use_hidden_bias=False)
+    elif dtype == float:
+        mixing = DenseMixingReal(hilbert.size * beta, use_hidden_bias=use_mixing_bias)
+
+    nnfun = stax.elementwise(activation)
+
+    return Jax(
+        hilbert,
+        stax.serial(RowColSerial(*deep_fun), mixing, nnfun, SumLayer),
+        dtype=dtype,
+        outdtype=complex,
     )

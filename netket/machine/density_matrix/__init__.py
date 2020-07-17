@@ -7,3 +7,4 @@ from ...utils import jax_available
 
 if jax_available:
     from .jax import Jax, NdmSpin, NdmSpinPhase, JaxRbmSpin
+    from .jax import JaxDeepNetwork
