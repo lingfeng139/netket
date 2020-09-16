@@ -15,7 +15,7 @@
 import netket as nk
 import numpy as np
 
-rg = nk.utils.RandomEngine(seed=1234)
+rg = nk.random.seed(seed=1234)
 
 # 1D Lattice
 L = 10
@@ -63,7 +63,7 @@ for i in range(L):
 lind = nk.operator.LocalLiouvillian(ha, j_ops)
 
 # RBM Spin Machine
-ma = nk.machine.NdmSpinPhase(hilbert=hi, alpha=1, beta=1)
+ma = nk.machine.density_matrix.NdmSpinPhase(hilbert=hi, alpha=1, beta=1)
 ma.init_random_parameters(seed=1234, sigma=0.001)
 
 # Metropolis Local Sampling

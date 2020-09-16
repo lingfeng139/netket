@@ -188,7 +188,7 @@ def steady_state(lindblad, sparse=False, method="ed", rho0=None, **kwargs):
     """
     from numpy import sqrt, matrix
 
-    M = lindblad.hilbert.hilbert_physical.n_states
+    M = lindblad.hilbert.physical.n_states
 
     if method == "ed":
         if not sparse:
@@ -213,13 +213,15 @@ def steady_state(lindblad, sparse=False, method="ed", rho0=None, **kwargs):
 
     elif method == "iterative":
 
-        iHnh = -1j * lindblad.get_effective_hamiltonian()
+        iHnh = -1j * lindblad.ham_nh
         if sparse:
             iHnh = iHnh.to_sparse()
             J_ops = [j.to_sparse() for j in lindblad.jump_ops]
+            J_ops_c = [j.conjugate().transpose().to_sparse() for j in lindblad.jump_ops]
         else:
             iHnh = iHnh.to_dense()
             J_ops = [j.to_dense() for j in lindblad.jump_ops]
+            J_ops_c = [j.conjugate().transpose().to_dense() for j in lindblad.jump_ops]
 
         # This function defines the product Liouvillian x densitymatrix, without
         # constructing the full density matrix (passed as a vector M^2).
@@ -238,8 +240,8 @@ def steady_state(lindblad, sparse=False, method="ed", rho0=None, **kwargs):
             drho = out[:-1].reshape((M, M))
 
             drho += rho @ iHnh + iHnh.conj().T @ rho
-            for J in J_ops:
-                drho += (J @ rho) @ J.conj().T
+            for J, J_c in zip(J_ops, J_ops_c):
+                drho += (J @ rho) @ J_c
 
             out[-1] = rho.trace()
             return out
