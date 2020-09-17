@@ -28,7 +28,7 @@ setup(
          neural networks and machine learning techniques.""",
     install_requires=[
         "numpy>=1.16",
-        "scipy>=1.2.1",
+        "scipy>=1.5.2",
         "mpi4py>=3.0.1",
         "tqdm>=4.42.1",
         "numba>=0.49.0",
