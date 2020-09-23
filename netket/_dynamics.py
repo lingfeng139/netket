@@ -224,11 +224,12 @@ class TimeEvolution(AbstractVariationalDriver):
             _step_end = self.t + t_interval
             t0 = self.t
             while self.t < _step_end:
+                self._loss_stats = self._driver._loss_stats
+
                 if self.t == t0:
                     yield self.t
 
                 self._step_count += 1
-                self._loss_stats = self._driver._loss_stats
                 self._integrator.step()
 
     def _log_additional_data(self, obs, step):
