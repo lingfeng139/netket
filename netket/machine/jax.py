@@ -15,6 +15,7 @@
 from jax.experimental.stax import Dense
 from jax.experimental import stax
 import jax
+import flax
 from collections import OrderedDict
 from functools import reduce
 
@@ -218,13 +219,9 @@ class Jax(AbstractMachine):
             raise RuntimeError("Invalid input shape, expected a 2d array")
 
         if out is None:
-            out = self._forward_fn(self._params, x).reshape(
-                x.shape[0],
-            )
+            out = self._forward_fn(self._params, x).reshape(x.shape[0],)
         else:
-            out[:] = self._forward_fn(self._params, x).reshape(
-                x.shape[0],
-            )
+            out[:] = self._forward_fn(self._params, x).reshape(x.shape[0],)
         return out
 
     @property
@@ -333,6 +330,17 @@ class Jax(AbstractMachine):
             k += size
 
         return tree_unflatten(tree, datalist)
+
+    def to_bytes(self):
+        pars, _ = jax.tree_flatten(self.parameters)
+        data = flax.serialization.msgpack_serialize(pars)
+        return data
+
+    def from_bytes(self, data):
+        _, tree_def = jax.tree_flatten(self.parameters)
+        pars = jax.tree_unflatten(tree_def, flax.serialization.msgpack_restore(data))
+        self.parameters = pars
+        return
 
 
 from jax.experimental import stax

@@ -2,6 +2,9 @@ import json as _json
 from os import path as _path
 from netket.vmc_common import tree_map as _tree_map
 
+import tarfile
+from io import BytesIO
+
 
 def _exists_json(prefix):
     return _path.exists(prefix + ".log") or _path.exists(prefix + ".wf")
@@ -13,6 +16,35 @@ def _to_json(ob):
         return ob.to_json()
     else:
         return ob
+
+
+def numpy_to_buffer(arr):
+    buf = BytesIO()
+    np.save(buf, arr, allow_pickle=False)
+    buf.seek(0)
+    return buf
+
+
+def save_numpy_to_tar(tar_file, data, name):
+    # convert data to a buffer in memory
+    abuf = numpy_to_buffer(data)
+    # Contruct the info object with the correct length
+    info = tarfile.TarInfo(name=name)
+    info.size = len(abuf.getbuffer())
+
+    # actually save the data to the tar file
+    tar_file.addfile(tarinfo=info, fileobj=abuf)
+
+
+def save_binary_to_tar(tar_file, byte_data, name):
+    abuf = BytesIO(byte_data)
+
+    # Contruct the info object with the correct length
+    info = tarfile.TarInfo(name=name)
+    info.size = len(abuf.getbuffer())
+
+    # actually save the data to the tar file
+    tar_file.addfile(tarinfo=info, fileobj=abuf)
 
 
 class JsonLog:
@@ -32,7 +64,12 @@ class JsonLog:
     """
 
     def __init__(
-        self, output_prefix, mode="write", save_params_every=50, write_every=50
+        self,
+        output_prefix,
+        mode="write",
+        save_params_every=50,
+        write_every=50,
+        tar_parameters=False,
     ):
         # Shorthands for mode
         if mode == "w":
@@ -75,6 +112,17 @@ class JsonLog:
         self._step_shift = 0
         self._steps_notflushed_write = 0
         self._steps_notflushed_pars = 0
+        self._files_open = [output_prefix + ".log", output_prefix + ".wf"]
+        self._tar_params = False
+
+        if tar_parameters:
+            if mode == "write":
+                mode = "w"
+            elif mode == "append":
+                mode = "a"
+            self._tar_file = tarfile.TarFile(output_prefix + ".tar", mode)
+            self._files_open.append(output_prefix + ".tar")
+            self._tar_params = True
 
     def previous_step(self):
         return self._old_step + self._step_shift
@@ -86,6 +134,11 @@ class JsonLog:
         item["Iteration"] = step + self._step_shift
 
         self._json_out["Output"].append(item)
+
+        if self._tar_params and machine is not None:
+            save_binary_to_tar(
+                self._tar_file, machine.to_bytes(), str(item["Iteration"])
+            )
 
         if (
             self._steps_notflushed_write % self._write_every == 0
