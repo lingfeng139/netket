@@ -120,12 +120,17 @@ class JsonLog:
                 mode = "w"
             elif mode == "append":
                 mode = "a"
-            self._tar_file = tarfile.TarFile(output_prefix + ".tar", mode)
-            self._files_open.append(output_prefix + ".tar")
             self._tar_params = True
+            self._tar_file_created = False
+            self._tar_file_mode = mode
 
     def previous_step(self):
         return self._old_step + self._step_shift
+
+    def _create_tar_file(self):
+        self._tar_file = tarfile.TarFile(self._prefix + ".tar", self._tar_file_mode)
+        self._files_open.append(self._prefix + ".tar")
+        self._tar_file_created = True
 
     def __call__(self, step, item, machine):
         if step + self._step_shift <= self._old_step:
@@ -136,6 +141,9 @@ class JsonLog:
         self._json_out["Output"].append(item)
 
         if self._tar_params and machine is not None:
+            if not self._tar_file_created:
+                self._create_tar_file()
+
             save_binary_to_tar(
                 self._tar_file, machine.to_bytes(), str(item["Iteration"])
             )
