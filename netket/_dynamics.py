@@ -161,6 +161,7 @@ class TimeEvolution(AbstractVariationalDriver):
             tend = tspan[-1]
         else:
             t0 = tspan
+            tend = _np.inf
 
         y0 = self._machine.numpy_flatten(self._machine.parameters)
 
@@ -220,10 +221,10 @@ class TimeEvolution(AbstractVariationalDriver):
             :(int): The current step.
         """
         t_end = self.t + delta_t
-        while self.t < t_end:
+        while self.t < t_end and self._integrator.status == "running":
             _step_end = self.t + t_interval
             t0 = self.t
-            while self.t < _step_end:
+            while self.t < _step_end and self._integrator.status == "running":
                 self._loss_stats = self._driver._loss_stats
 
                 if self.t == t0:
@@ -250,7 +251,27 @@ class TimeEvolution(AbstractVariationalDriver):
 
     @dt.setter
     def dt(self, _dt):
-        self._integrator.step_size = _dt
+        success = False
+        try:
+            self._integrator.step_size = _dt
+            success = True
+        except AttributeError:
+            pass
+
+        if not success:
+            try:
+                self._integrator.h_abs = _dt
+                success = True
+            except AttributeError:
+                pass
+
+        if not success:
+            if self._integrator.h_abs == self._integrator.max_step:
+                self._integrator.h_abs = _dt
+                self.max_step = _dt
+            else:
+                self._integrator.h_abs = _dt
+            success = True
 
     @property
     def t(self):
@@ -263,6 +284,10 @@ class TimeEvolution(AbstractVariationalDriver):
     @property
     def t_end(self):
         return self._integrator.t_bound
+
+    @t_end.setter
+    def t_end(self, t_end):
+        self._integrator.t_bound = t_end
 
     @property
     def state(self):
