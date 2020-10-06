@@ -133,7 +133,7 @@ def _der_local_values_impl(op, machine, v, log_vals):
     mels_r = mels.reshape(-1, n_primes)
 
     if machine._dtype is complex:
-        pars = pars
+        pars = machine._params
     else:
         pars = tree_map(lambda v: v.astype(jax.numpy.complex128), machine._params)
 
