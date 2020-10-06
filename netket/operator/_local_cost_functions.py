@@ -10,6 +10,10 @@ from inspect import signature
 # zero cost abstraction 🧙.
 _batch_axes = {}
 
+# Store unjitted functions in a dictionary, where keys are jitted functions, so that all
+# functions only jit once (the external level). This improves compilation time.
+_unjitted_cost_fun = {}
+
 
 def local_cost_function(fun, static_argnums=0, batch_axes=None):
     """
@@ -48,6 +52,7 @@ def local_cost_function(fun, static_argnums=0, batch_axes=None):
         batch_axes = (None, None) + tuple([None for _ in range(npars - 2)])
 
     _batch_axes[jitted_fun] = batch_axes
+    _unjitted_cost_fun[jitted_fun] = fun
 
     return jitted_fun
 
@@ -63,7 +68,9 @@ def local_cost_function(fun, static_argnums=0, batch_axes=None):
 # It's defined so that we dont double-jit some functions leading to a slight
 # speedup in compilation time
 def _der_local_cost_function(local_cost_fun, logpsi, pars, *args):
-    der_local_cost_fun = jax.grad(local_cost_fun, argnums=1, holomorphic=True)
+    der_local_cost_fun = jax.grad(
+        _unjitted_cost_fun[local_cost_fun], argnums=1, holomorphic=True
+    )
     return der_local_cost_fun(logpsi, pars, *args)
 
 
@@ -93,13 +100,15 @@ def ders_local_cost_function(local_cost_fun, logpsi, pars, *args):
             _der_local_cost_function, in_axes=_batch_axes[local_cost_fun], out_axes=0
         ),
     )
-    return der_local_cost_funs(logpsi, pars, *args)
+    return der_local_cost_funs(local_cost_fun, logpsi, pars, *args)
 
 
 ###
 # same assumptions as above
 def _local_cost_and_grad_function(local_cost_fun, logpsi, pars, *args):
-    der_local_cost_fun = jax.value_and_grad(local_cost_fun, argnums=1, holomorphic=True)
+    der_local_cost_fun = jax.value_and_grad(
+        _unjitted_cost_fun[local_cost_fun], argnums=1, holomorphic=True
+    )
     return der_local_cost_fun(logpsi, pars, *args)
 
 
@@ -131,7 +140,7 @@ def local_costs_and_grads_function(local_cost_fun, logpsi, pars, *args):
         in_axes=_batch_axes[local_cost_fun],
         out_axes=(0, 0),
     )
-    return local_costs_and_grads_fun(logpsi, pars, *args)
+    return local_costs_and_grads_fun(local_cost_fun, logpsi, pars, *args)
 
 
 ####### Defined functions
