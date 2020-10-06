@@ -15,9 +15,9 @@ _batch_axes = {}
 _unjitted_cost_fun = {}
 
 
-def local_cost_function(fun, static_argnums=0, batch_axes=None):
+def define_local_cost_function(fun, static_argnums=0, batch_axes=None):
     """
-    @local_cost_function(fun, static_argnums=0, batch_axes=automatic)
+    @define_local_cost_function(fun, static_argnums=0, batch_axes=automatic)
 
     A decorator to be used to define a local cost function and it's gradient. The function
     to be decorated must be a jax-compatible function, that takes the following positional
@@ -34,7 +34,7 @@ def local_cost_function(fun, static_argnums=0, batch_axes=None):
 
     An example is provided below:
     ```python
-    @partial(local_cost_function, static_argnums=0, batch_axes=(None, None, 0, 0, 0))
+    @partial(define_local_cost_function, static_argnums=0, batch_axes=(None, None, 0, 0, 0))
     def local_energy_kernel(logpsi, pars, vp, mel, v):
         return jax.numpy.sum(mel * jax.numpy.exp(logpsi(pars, vp) - logpsi(pars, v)))
     ```
@@ -55,6 +55,33 @@ def local_cost_function(fun, static_argnums=0, batch_axes=None):
     _unjitted_cost_fun[jitted_fun] = fun
 
     return jitted_fun
+
+
+def _local_cost_function(local_cost_fun, logpsi, pars, *args):
+    """
+    _local_cost_function(local_cost_fun, logpsi, pars, *args)
+
+    Function to compute the local cost function in batches
+
+    Args:
+        local_cost_fun: the cost function
+        logpsi: the parametric function encoding the quantum state
+        pars: the variational parameters representing the state
+        *args: additional arguments
+
+    Returns:
+        the value of log_psi with parameters `pars` for the batches *args
+    """
+    local_cost_fun_vmap = jax.vmap(
+        _unjitted_cost_fun[local_cost_fun],
+        in_axes=_batch_axes[local_cost_fun],
+        out_axes=0,
+    )
+
+    return local_cost_fun_vmap(local_cost_fun, logpsi, pars, *args)
+
+
+local_cost_function = jax.jit(_local_cost_function, static_argnums=(0, 1))
 
 
 # In the following, all functions assume that the arguments are passed in that order:
@@ -95,11 +122,13 @@ def ders_local_cost_function(local_cost_fun, logpsi, pars, *args):
     Returns:
         the gradient with respect to `pars`
     """
-    der_local_cost_funs = (
-        jax.vmap(
-            _der_local_cost_function, in_axes=_batch_axes[local_cost_fun], out_axes=0
-        ),
+    # The extra None batch axe corresponds to _der_local_cost_function itself
+    der_local_cost_fun = jax.vmap(
+        _der_local_cost_function,
+        in_axes=(None,) + _batch_axes[local_cost_fun],
+        out_axes=0,
     )
+
     return der_local_cost_funs(local_cost_fun, logpsi, pars, *args)
 
 
@@ -112,7 +141,9 @@ def _local_cost_and_grad_function(local_cost_fun, logpsi, pars, *args):
     return der_local_cost_fun(logpsi, pars, *args)
 
 
-local_cost_and_grad_function = jax.jit(_local_cost_and_grad_function, static_argnums=0)
+local_cost_and_grad_function = jax.jit(
+    _local_cost_and_grad_function, static_argnums=(0, 1)
+)
 
 
 @partial(jax.jit, static_argnums=(0, 1))
@@ -137,13 +168,7 @@ def local_costs_and_grads_function(local_cost_fun, logpsi, pars, *args):
 
     local_costs_and_grads_fun = jax.vmap(
         _local_cost_and_grad_function,
-        in_axes=_batch_axes[local_cost_fun],
+        in_axes=(None,) + _batch_axes[local_cost_fun],
         out_axes=(0, 0),
     )
     return local_costs_and_grads_fun(local_cost_fun, logpsi, pars, *args)
-
-
-####### Defined functions
-@partial(local_cost_function, static_argnums=0, batch_axes=(None, None, 0, 0, 0))
-def local_energy_kernel(logpsi, pars, vp, mel, v):
-    return jax.numpy.sum(mel * jax.numpy.exp(logpsi(pars, vp) - logpsi(pars, v)))

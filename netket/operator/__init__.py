@@ -19,9 +19,10 @@ from netket.utils import jax_available
 
 if jax_available:
     from ._local_cost_functions import (
+        define_local_cost_function,
         local_cost_function,
-        local_KL_kernel,
-        local_energy_kernel,
         local_cost_and_grad_function,
         local_costs_and_grads_function,
+        local_energy_kernel,
     )
+    from ._der_local_values_jax import local_energy_kernel

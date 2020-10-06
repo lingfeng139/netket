@@ -3,50 +3,17 @@ import numpy as _np
 from functools import partial
 
 from ._local_liouvillian import LocalLiouvillian as _LocalLiouvillian
+from ._local_cost_functions import (
+    define_local_cost_function,
+    local_costs_and_grads_function,
+)
 from ..vmc_common import tree_map
 
-########################################
-# Perform AD through the local values and then vmap.
-# Used to compute the gradient
-# \sum_i mel(i) * exp(vp(i)-v) * ( O_k(vp(i)) - O_k(v) )
-
 #  Assumes that v is a single state (Vector) and vp is a batch (matrix). pars can be a pytree.
-@partial(jax.jit, static_argnums=0)
-def _local_value_kernel(logpsi, pars, vp, mel, v):
+@partial(define_local_cost_function, static_argnums=0, batch_axes=(None, None, 0, 0, 0))
+def local_energy_kernel(logpsi, pars, vp, mel, v):
     return jax.numpy.sum(mel * jax.numpy.exp(logpsi(pars, vp) - logpsi(pars, v)))
 
-
-#  Assumes that v is a single state (Vector) and vp is a batch (matrix). pars can be a pytree.
-_der_local_value_kernel = jax.jit(
-    jax.grad(_local_value_kernel, argnums=1, holomorphic=True),
-    static_argnums=0,
-)
-
-#  Assumes that v is a batch (matrix) and vp is a batch-batch (3-tensor).
-_der_local_values_kernel = jax.jit(
-    jax.vmap(_der_local_value_kernel, in_axes=(None, None, 0, 0, 0), out_axes=0),
-    static_argnums=0,
-)
-
-########################################
-# Perform AD through the local values and then vmap.
-# Also return the local_value, which is the local_energy.
-# unused at the moment, but could be exploited to decrease multiple computations
-# of local energy.
-#
-
-# same assumptions as above
-_local_value_and_grad_kernel = jax.jit(
-    jax.value_and_grad(_local_value_kernel, argnums=1, holomorphic=True),
-    static_argnums=0,
-)
-
-_local_values_and_grads_kernel = jax.jit(
-    jax.vmap(
-        _local_value_and_grad_kernel, in_axes=(None, None, 0, 0, 0), out_axes=(0, 0)
-    ),
-    static_argnums=0,
-)
 
 ########################################
 # Computes the non-centered gradient of local values
@@ -122,6 +89,10 @@ def _der_local_values_notcentered_impl(op, machine, v, log_vals):
     return grad
 
 
+########################################
+# Perform AD through the local values and then vmap.
+# Used to compute the gradient
+# \sum_i mel(i) * exp(vp(i)-v) * ( O_k(vp(i)) - O_k(v) )
 def _der_local_values_impl(op, machine, v, log_vals):
     sections = _np.empty(v.shape[0], dtype=_np.int32)
     v_primes, mels = op.get_conn_flattened(v._value, sections, pad=True)
@@ -137,8 +108,8 @@ def _der_local_values_impl(op, machine, v, log_vals):
     else:
         pars = tree_map(lambda v: v.astype(jax.numpy.complex128), machine._params)
 
-    val, grad = _local_values_and_grads_kernel(
-        machine.jax_forward, pars, v_primes_r, mels_r, v
+    val, grad = local_costs_and_grads_function(
+        local_energy_kernel, machine.jax_forward, pars, v_primes_r, mels_r, v
     )
     return grad
 
@@ -169,12 +140,6 @@ def der_local_values_jax(
                 log_vals: A scalar/numpy array containing the value(s) :math:`\Psi(V)`.
                     If not given, it is computed from scratch.
                     Defaults to None.
-                der_log_vals: A numpy tensor containing the vector of log-derivative(s) :math:`O_i(V)`.
-                    If not given, it is computed from scratch.
-                    Defaults to None.
-                out: A scalar or a numpy array of local values of the operator.
-                    If not given, it is allocated from scratch and then returned.
-                    Defaults to None.
                 center_derivative: Whever to center the derivatives or not. In the formula above,
                     When this is true/false it is equivalent to setting :math:`\alpha=\{1 / 2\}`.
                     By default `center_derivative=True`, meaning that it returns the correct
@@ -195,16 +160,6 @@ def der_local_values_jax(
         log_vals = machine.log_val(v)
 
     if center_derivative is True:
-        return _der_local_values_impl(
-            op,
-            machine,
-            v,
-            log_vals,
-        )
+        return _der_local_values_impl(op, machine, v, log_vals,)
     else:
-        return _der_local_values_notcentered_impl(
-            op,
-            machine,
-            v,
-            log_vals,
-        )
+        return _der_local_values_notcentered_impl(op, machine, v, log_vals,)
