@@ -1,6 +1,5 @@
-import jax as jax
+import jax
 import numpy as _np
-from numba import jit
 from functools import partial
 
 from ._local_liouvillian import LocalLiouvillian as _LocalLiouvillian
@@ -12,21 +11,21 @@ from ..vmc_common import tree_map
 # \sum_i mel(i) * exp(vp(i)-v) * ( O_k(vp(i)) - O_k(v) )
 
 #  Assumes that v is a single state (Vector) and vp is a batch (matrix). pars can be a pytree.
-@partial(jax.jit, static_argnums=4)
-def _local_value_kernel(pars, vp, mel, v, logpsi):
+@partial(jax.jit, static_argnums=0)
+def _local_value_kernel(logpsi, pars, vp, mel, v):
     return jax.numpy.sum(mel * jax.numpy.exp(logpsi(pars, vp) - logpsi(pars, v)))
 
 
 #  Assumes that v is a single state (Vector) and vp is a batch (matrix). pars can be a pytree.
 _der_local_value_kernel = jax.jit(
-    jax.grad(_local_value_kernel, argnums=0, holomorphic=True),
-    static_argnums=4,
+    jax.grad(_local_value_kernel, argnums=1, holomorphic=True),
+    static_argnums=0,
 )
 
 #  Assumes that v is a batch (matrix) and vp is a batch-batch (3-tensor).
 _der_local_values_kernel = jax.jit(
-    jax.vmap(_der_local_value_kernel, in_axes=(None, 0, 0, 0, None), out_axes=0),
-    static_argnums=4,
+    jax.vmap(_der_local_value_kernel, in_axes=(None, None, 0, 0, 0), out_axes=0),
+    static_argnums=0,
 )
 
 ########################################
@@ -38,23 +37,23 @@ _der_local_values_kernel = jax.jit(
 
 # same assumptions as above
 _local_value_and_grad_kernel = jax.jit(
-    jax.value_and_grad(_local_value_kernel, argnums=0, holomorphic=True),
-    static_argnums=4,
+    jax.value_and_grad(_local_value_kernel, argnums=1, holomorphic=True),
+    static_argnums=0,
 )
 
 _local_values_and_grads_kernel = jax.jit(
     jax.vmap(
-        _local_value_and_grad_kernel, in_axes=(None, 0, 0, 0, None), out_axes=(0, 0)
+        _local_value_and_grad_kernel, in_axes=(None, None, 0, 0, 0), out_axes=(0, 0)
     ),
-    static_argnums=4,
+    static_argnums=0,
 )
 
 ########################################
 # Computes the non-centered gradient of local values
 # \sum_i mel(i) * exp(vp(i)-v) * O_k(i)
-@partial(jax.jit, static_argnums=(4, 5))
+@partial(jax.jit, static_argnums=(0, 5))
 def _local_value_and_grad_notcentered_kernel(
-    pars, vp, mel, v, logpsi, real_to_complex=False
+    logpsi, pars, vp, mel, v, real_to_complex=False
 ):
     # can use if with jit because that argument is exposed statically to the jit!
     if real_to_complex:
@@ -90,16 +89,16 @@ def _local_value_and_grad_notcentered_kernel(
     return loc_val, grad_c
 
 
-@partial(jax.jit, static_argnums=(4, 5))
+@partial(jax.jit, static_argnums=(0, 5))
 def _local_values_and_grads_notcentered_kernel(
-    pars, vp, mel, v, logpsi, real_to_complex=False
+    logpsi, pars, vp, mel, v, real_to_complex=False
 ):
     f_vmap = jax.vmap(
         _local_value_and_grad_notcentered_kernel,
-        in_axes=(None, 0, 0, 0, None, None),
+        in_axes=(None, None, 0, 0, 0, None),
         out_axes=(0, 0),
     )
-    return f_vmap(pars, vp, mel, v, logpsi, real_to_complex)
+    return f_vmap(logpsi, pars, vp, mel, v, real_to_complex)
 
 
 def _der_local_values_notcentered_impl(op, machine, v, log_vals):
@@ -118,7 +117,7 @@ def _der_local_values_notcentered_impl(op, machine, v, log_vals):
         real_to_complex = False
 
     val, grad = _local_values_and_grads_notcentered_kernel(
-        machine.parameters, v_primes_r, mels_r, v, machine.jax_forward, real_to_complex
+        machine.jax_forward, machine.parameters, v_primes_r, mels_r, v, real_to_complex
     )
     return grad
 
@@ -139,7 +138,7 @@ def _der_local_values_impl(op, machine, v, log_vals):
         pars = tree_map(lambda v: v.astype(jax.numpy.complex128), machine._params)
 
     val, grad = _local_values_and_grads_kernel(
-        pars, v_primes_r, mels_r, v, machine.jax_forward
+        machine.jax_forward, pars, v_primes_r, mels_r, v
     )
     return grad
 
