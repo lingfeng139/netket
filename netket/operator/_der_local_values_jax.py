@@ -146,6 +146,16 @@ def der_local_values_jax(
         log_vals = machine.log_val(v)
 
     if center_derivative is True:
-        return _der_local_values_impl(op, machine, v, log_vals,)
+        return _der_local_values_impl(
+            op,
+            machine,
+            v,
+            log_vals,
+        )
     else:
-        return _der_local_values_notcentered_impl(op, machine, v, log_vals,)
+        return _der_local_values_notcentered_impl(
+            op,
+            machine,
+            v,
+            log_vals,
+        )
