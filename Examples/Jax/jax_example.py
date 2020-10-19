@@ -1,5 +1,4 @@
 import netket as nk
-import numpy as np
 
 
 # 1D Lattice
