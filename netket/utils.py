@@ -32,6 +32,14 @@ except ImportError:
     jax_available = False
 
 if jax_available:
+
+    try:
+        import flax
+
+        flax_available = True
+    except ImportError:
+        flax_available = False
+
     try:
         import mpi4jax
 
@@ -46,6 +54,7 @@ if jax_available:
         mpi4jax_available = False
 else:
     mpi4jax_available = False
+    flax_available = False
 
 try:
     import torch
