@@ -38,8 +38,9 @@ setup(
     python_requires=">=3.6",
     extras_require={
         "dev": [
-            "pytest",
-            "pytest-xdist",
+            "pytest>=5",
+            "pytest-xdist>=2",
+            "coverage>=5",
             "python-igraph",
             "pre-commit",
             "black==20.8b1",
