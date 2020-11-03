@@ -104,8 +104,8 @@ install:
     if [ -z "$CONDA" ]; then
       python -m pip install mpi4jax
     fi
-  - python -m pytest --version
   - python -m pip install -v ".[dev,jax]"
+  - python -m pytest --version
   - mkdir workdir && cd workdir
 
 script:
