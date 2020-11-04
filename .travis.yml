@@ -109,5 +109,5 @@ install:
 
 script:
   - python -c 'import netket'
-  - python -m pytest --verbose 
+  - python -m pytest --verbose -n 2
   - mpirun -np 2 python -m pytest -n 0 --verbose Test/MPI
