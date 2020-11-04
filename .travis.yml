@@ -106,9 +106,8 @@ install:
     fi
   - python -m pip install -v ".[dev,jax]"
   - python -m pytest --version
-  - mkdir workdir && cd workdir
 
 script:
   - python -c 'import netket'
-  - python -m pytest -n 2 --verbose ../Test/
-  - mpirun -np 2 python -m pytest -n 0 --verbose ../Test/MPI
+  - python -m pytest --verbose 
+  - mpirun -np 2 python -m pytest -n 0 --verbose Test/MPI
